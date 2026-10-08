@@ -1,0 +1,100 @@
+# Example GitHub Actions workflow. Copy to .github/workflows/ in your test repo and adapt the
+# "Run blocking tests" commands to your runner (pytest shown; Maven/Playwright notes inline).
+#
+# History lives in .testpredict/history.db and is carried between runs with actions/cache.
+# PR runs are trimmed + reordered; the nightly schedule runs everything so deferred tests keep
+# fresh history.
+name: predictive-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"   # nightly full run
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for `git diff base...HEAD`
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install testpredict
+        run: pip install "git+https://github.com/<your-org>/testpredict.git"   # or a path / internal index
+
+      - name: Restore test history
+        uses: actions/cache/restore@v4
+        with:
+          path: .testpredict
+          key: testpredict-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            testpredict-${{ github.ref_name }}-
+            testpredict-main-
+
+      - name: Plan
+        id: plan
+        run: |
+          BASE="origin/${{ github.base_ref || 'main' }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BUDGET="--budget-fraction 0.4"          # blocking run capped at 40% of suite time
+          else
+            BUDGET=""                               # main/nightly: run everything, just reorder
+          fi
+          if [ -f .testpredict/history.db ]; then
+            tpredict plan --git-base "$BASE" $BUDGET --format pytest --out-dir plan
+            cat plan/plan.md >> "$GITHUB_STEP_SUMMARY"
+            echo "planned=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No history yet: running full suite to seed it." >> "$GITHUB_STEP_SUMMARY"
+            echo "planned=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run blocking tests
+        run: |
+          mkdir -p reports
+          if [ "${{ steps.plan.outputs.planned }}" = "true" ]; then
+            # Guard: an empty list would make pytest run everything.
+            [ -s plan/selected.txt ] || { echo "nothing selected"; exit 0; }
+            pytest $(cat plan/selected.txt) --junitxml=reports/blocking.xml
+            # Maven:      mvn test -Dtest="$(paste -sd, plan/selected.txt)"   (plan with --format maven)
+            # Playwright: run by file/grep from plan/selected.txt (plan with --format ids)
+          else
+            pytest --junitxml=reports/blocking.xml
+          fi
+
+      - name: Run quarantined flaky tests (non-blocking)
+        if: always() && steps.plan.outputs.planned == 'true'
+        continue-on-error: true
+        run: |
+          [ -s plan/quarantined.txt ] || exit 0
+          pytest $(cat plan/quarantined.txt) --junitxml=reports/quarantine.xml
+
+      - name: Record results, retrain, report flaky tests
+        if: always()
+        run: |
+          tpredict ingest reports/ --git-base "origin/${{ github.base_ref || 'main' }}"
+          tpredict train
+          tpredict flaky --out flaky.md >/dev/null
+          cat flaky.md >> "$GITHUB_STEP_SUMMARY"
+          tpredict report --type health --out report/health.html
+          # add `--config .testpredict-report.json` for your own branding / report types
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-health-report
+          path: report/
+
+      - name: Save test history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .testpredict
+          key: testpredict-${{ github.ref_name }}-${{ github.run_id }}

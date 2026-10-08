@@ -1,0 +1,24 @@
+{
+  "title": "Checkout squad — QA health",
+  "brand": "ACME QA",
+  "accent": "#7b2cbf",
+  "trend_runs": 40,
+  "top_n": 15,
+  "plugins": ["report_plugins/module_breakdown.py"],
+  "report_types": {
+    "standup": {
+      "title": "Daily standup",
+      "description": "What broke, what's flaky, where it hurts.",
+      "sections": ["summary", "trend", "module-breakdown", "health", "failure-clusters"]
+    },
+    "release-gate": {
+      "title": "Release readiness",
+      "sections": ["summary", "health", "top-failing", "backtest"]
+    }
+  },
+  "section_options": {
+    "module-breakdown": {"depth": 2, "limit": 8},
+    "health": {"limit": 10, "title": "Tests to fix this sprint"},
+    "trend": {"runs": 30}
+  }
+}

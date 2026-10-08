@@ -1,0 +1,44 @@
+# Example GitLab CI job. Include or copy into your .gitlab-ci.yml and adapt the test commands.
+# History is kept in the GitLab cache (.testpredict/). Merge requests run a trimmed, reordered
+# suite; scheduled pipelines run everything.
+predictive-tests:
+  image: python:3.11
+  variables:
+    GIT_DEPTH: 0   # full history for git diff
+  cache:
+    key: testpredict-$CI_DEFAULT_BRANCH   # shared across branches so MRs reuse main's history
+    paths: [.testpredict/]
+  before_script:
+    - pip install "git+https://gitlab.com/<your-group>/testpredict.git"
+    - git fetch origin "$CI_DEFAULT_BRANCH"
+  script:
+    - BASE="origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+    - mkdir -p reports
+    - |
+      if [ -f .testpredict/history.db ] && [ "$CI_PIPELINE_SOURCE" != "schedule" ]; then
+        BUDGET=""
+        [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ] && BUDGET="--budget-fraction 0.4"
+        tpredict plan --git-base "$BASE" $BUDGET --format pytest --out-dir plan
+        if [ -s plan/quarantined.txt ]; then
+          pytest $(cat plan/quarantined.txt) --junitxml=reports/quarantine.xml || true
+        fi
+        if [ -s plan/selected.txt ]; then
+          pytest $(cat plan/selected.txt) --junitxml=reports/blocking.xml
+        fi
+      else
+        pytest --junitxml=reports/blocking.xml
+      fi
+  after_script:
+    - BASE="origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+    - tpredict ingest reports/ --git-base "$BASE" && tpredict train && tpredict flaky --out flaky.md
+    - tpredict report --type health --out report/health.html
+  artifacts:
+    when: always
+    paths: [plan/, flaky.md, report/]
+    expose_as: test health report
+    reports:
+      junit: reports/*.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"

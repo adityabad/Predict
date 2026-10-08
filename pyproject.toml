@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "testpredict"
+version = "0.1.0"
+description = "Predict automation failures and flaky tests from JUnit history; prioritize and trim CI test runs."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "scikit-learn>=1.3",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+tpredict = "testpredict.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["testpredict*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
